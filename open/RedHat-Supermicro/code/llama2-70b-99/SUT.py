@@ -21,7 +21,6 @@ import requests
 from urllib3.exceptions import InsecureRequestWarning
 import json
 
-from inference import GrpcClient
 import more_itertools as mit
 from itertools import repeat
 
