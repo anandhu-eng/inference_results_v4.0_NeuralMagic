@@ -146,6 +146,13 @@ class SUT():
                                    self.data_object.LoadSamplesToRam, self.data_object.UnloadSamplesFromRam)
 
         # self.load_model()
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            self.model_path,
+            model_max_length=1024,
+            padding_side="left",
+            use_fast=True,) #changed from false
+
+        self.tokenizer.pad_token = self.tokenizer.eos_token
 
         self.num_workers = workers
         self.worker_threads = [None] * self.num_workers
