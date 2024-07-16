@@ -96,8 +96,6 @@ class SUT():
                  api_server=None,
                  api_model_name=None,
                  additional_servers=[],
-                 grpc=False,
-                 batch_grpc=False,
                  vllm=False,
                  dtype="bfloat16",
                  device="cpu",
@@ -116,11 +114,7 @@ class SUT():
         for server in additional_servers:
             self.api_servers.append(server)
         self.api_model_name = api_model_name
-        self.grpc = grpc
-        self.batch_grpc = batch_grpc
         self.vllm = vllm
-        if self.vllm and (self.grpc or self.batch_grpc):
-            sys.exit("vllm does not support grpc")
         self.device = device
 
         if not batch_size:
@@ -152,7 +146,7 @@ class SUT():
         self.qsl = lg.ConstructQSL(self.data_object.total_sample_count, self.data_object.perf_count,
                                    self.data_object.LoadSamplesToRam, self.data_object.UnloadSamplesFromRam)
 
-        self.load_model()
+        # self.load_model()
 
         self.num_workers = workers
         self.worker_threads = [None] * self.num_workers
@@ -179,33 +173,7 @@ class SUT():
 
 
     def query_api(self, input, idx):
-        headers = {
-            'Content-Type': 'application/json',
-        }
-
-        json_data = {
-            'model_id': self.api_model_name,
-            'inputs': input,
-            'parameters': {
-                'max_new_tokens': 1024,
-                'min_new_tokens': 1,
-                'decoding_method': "GREEDY"
-            },
-        }
-
-        response_code = 0
-        while response_code != 200:
-            try:
-                response = requests.post(
-                    self.api_servers[idx],
-                    headers=headers,
-                    json=json_data,
-                    verify=False,
-                )
-                response_code = response.status_code
-            except:
-                print("connection failure")
-        return json.loads(response.text)["generated_text"]
+        pass
     
     def query_api_vllm(self, inputs, idx):
         headers = {
@@ -213,11 +181,13 @@ class SUT():
         }
 
         json_data = {
-            'model': '/opt/app-root/share/models',
+            'model': self.api_model_name,
             'prompt': inputs,
             'max_tokens': 1024,
             'temperature': 0,
         }
+
+        print(json_data)
 
         response_code = 0
         while response_code != 200:
@@ -226,24 +196,12 @@ class SUT():
                 response_code = response.status_code
             except:
                 print("connection failure")
+                exit()
         return [resp["text"] for resp in json.loads(response.text)["choices"]]
-
-    def query_api_grpc(self, input, idx):
-        resp = self.grpc_clients[idx].make_request([input], model_id=self.api_model_name)
-        return resp.responses[0].text
-
-    def query_api_batch_grpc(self, inputs, idx):
-        resps = self.grpc_clients[idx].make_request(inputs, model_id=self.api_model_name)
-        return [resp.text for resp in resps.responses]
     
     def api_action_handler(self, chunk, server_idx):
-        if self.grpc:
-            if self.batch_grpc:
-                output = self.query_api_batch_grpc(chunk, server_idx)
-            else:
-                with ThreadPoolExecutor(max_workers=len(chunk)) as executor:
-                    output = list(executor.map(self.query_api_grpc,chunk, repeat(server_idx)))
-        elif self.vllm:
+        # removed the part for grpc
+        if self.vllm:
             output = self.query_api_vllm(chunk, server_idx)
         else:
             with ThreadPoolExecutor(max_workers=len(chunk)) as executor:
@@ -310,21 +268,14 @@ class SUT():
                     for row in output_chunks:
                         output += row
                 else:
-                    pred_output_tokens = self.model.generate(
-                        input_ids=input_ids_tensor,
-                        attention_mask=input_masks_tensor,
-                        pad_token_id=self.tokenizer.pad_token_id,
-                        **gen_kwargs
-                    )
+                    print("Error: Specify at least one API to which the request is to be sent!")
+                    exit()
 
                 tik3 = time.time()
 
                 if self.api_servers:
                     processed_output = np.array(self.tokenizer(output, padding='longest')['input_ids'])
-                else:
-                    processed_output = self.data_object.postProcess(pred_output_tokens,
-                                                                    input_seq_lens=input_len,
-                                                                    query_id_list=query_ids)
+                    # non api part code removed
 
             for i in range(len(qitem)):
                 unpadded = np.delete(processed_output[i], np.where(processed_output[i] == 2))
@@ -346,51 +297,6 @@ class SUT():
                     print(f"\t==== Total time: {tok - tik1}")
                 else:
                     print(f"\tLoaded from cache: {_p}")
-
-
-    def load_model(self):
-        if self.api_servers:
-            if not self.api_model_name:
-                sys.exit("API Server was specified but no model name was provided")
-            self.grpc_clients = []
-            for server in self.api_servers:
-                if self.grpc:
-                    hostname = re.sub("https://|http://", "", server)
-                    if hostname[-1] == "/":
-                        hostname = hostname[:-1]
-                    grpc_client = GrpcClient(
-                        hostname,
-                        443,
-                        verify=False,
-                    )
-                    self.grpc_clients.append(grpc_client)
-                elif not "http" in server:
-                    server = "http://" + server
-
-        else:
-            self.model = LlamaForCausalLM.from_pretrained(
-                self.model_path,
-                device_map="auto",
-                low_cpu_mem_usage=True,
-                torch_dtype=self.amp_dtype
-            )
-            print("Loaded model")
-
-            self.device = torch.device(self.device)
-            if self.device == "cpu":
-                self.model = self.model.to(self.device)  # Force CPU if your system has GPU and you specifically want CPU-only run
-
-            self.model.eval()
-            self.model = self.model.to(memory_format=torch.channels_last)
-
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            self.model_path,
-            model_max_length=1024,
-            padding_side="left",
-            use_fast=True,) #changed from false
-
-        self.tokenizer.pad_token = self.tokenizer.eos_token
-        print("Loaded tokenizer")
 
     def get_sut(self):
         self.sut = lg.ConstructSUT(self.issue_queries, self.flush_queries)
@@ -425,7 +331,7 @@ class SUT():
 
 
 class SUTServer(SUT):
-    def __init__(self, model_path=None, api_server=None, additional_servers=[], api_model_name=None, grpc=False, batch_grpc=False, vllm=False, dtype="bfloat16", device="cpu", total_sample_count=24576, dataset_path=None, workers=1):
+    def __init__(self, model_path=None, api_server=None, additional_servers=[], api_model_name=None, vllm=False, dtype="bfloat16", device="cpu", total_sample_count=24576, dataset_path=None, workers=1):
 
         super().__init__(model_path=model_path, api_server=api_server, additional_servers=additional_servers, api_model_name=api_model_name, grpc=grpc, vllm=vllm, dtype=dtype, device=device, total_sample_count=total_sample_count, dataset_path=dataset_path, workers=workers)
 

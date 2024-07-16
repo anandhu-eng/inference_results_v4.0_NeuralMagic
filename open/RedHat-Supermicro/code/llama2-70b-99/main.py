@@ -20,8 +20,6 @@ def get_args():
     parser.add_argument("--api-model-name", type=str, default=None, help="Specify a model name to use api mode")
     parser.add_argument("--additional-servers", nargs='+', default=[], help="Specify additional endpoints for load splitting")
     parser.add_argument("--accuracy", action="store_true", help="Run accuracy mode")
-    parser.add_argument("--grpc", action="store_true", help="Enable grpc for api endpoint")
-    parser.add_argument("--batch-grpc", action="store_true", help="Enable batch requests for grpc")
     parser.add_argument("--vllm", action="store_true", help="Switch runtime to vllm for api endpoint")
     parser.add_argument("--dtype", type=str, default="float32", help="data type of the model, choose from float16, bfloat16 and float32")
     parser.add_argument("--device", type=str,  choices=["cpu", "cuda:0"], default="cpu", help="device to use")
@@ -77,8 +75,6 @@ def main():
         api_server=args.api_server,
         api_model_name=args.api_model_name,
         additional_servers=args.additional_servers,
-        grpc=args.grpc,
-        batch_grpc=args.batch_grpc,
         vllm=args.vllm,
         dtype=args.dtype,
         dataset_path=args.dataset_path,
